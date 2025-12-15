@@ -162,6 +162,41 @@ async def _initialize_browser_and_page() -> None:
         state.model_list_fetch_event.set()
 
 
+async def _initialize_session_manager() -> None:
+    """Initialize session manager if multi-session pooling is enabled."""
+    from config.settings import MULTI_SESSION_ENABLED, SAVED_AUTH_DIR, SESSION_POOL_SIZE
+
+    if not MULTI_SESSION_ENABLED:
+        state.logger.info("Multi-session pooling disabled (default mode)")
+        return
+
+    if not state.browser_instance or not state.is_browser_connected:
+        state.logger.warning(
+            "Cannot initialize session manager: browser not connected"
+        )
+        return
+
+    from api_utils.session_manager import SessionManager
+
+    state.logger.info("Initializing multi-session pool...")
+    state.session_manager = SessionManager()
+
+    try:
+        await state.session_manager.initialize(
+            state.browser_instance,
+            SAVED_AUTH_DIR,
+            max_sessions=SESSION_POOL_SIZE,
+        )
+        state.logger.info(
+            f"Multi-session pool initialized: "
+            f"{state.session_manager.active_session_count} active session(s)"
+        )
+    except Exception as e:
+        state.logger.error(f"Failed to initialize session manager: {e}")
+        state.session_manager = None
+        # Don't raise - fall back to single session mode
+
+
 async def _shutdown_resources() -> None:
     """Gracefully shut down all resources."""
     logger = state.logger
@@ -169,6 +204,15 @@ async def _shutdown_resources() -> None:
 
     # Signal all streaming generators to exit immediately
     state.should_exit = True
+
+    # Close session manager first (before individual page/browser)
+    if state.session_manager:
+        logger.info("Closing session manager...")
+        try:
+            await state.session_manager.close_all()
+        except Exception as e:
+            logger.warning(f"Error closing session manager: {e}")
+        state.session_manager = None
 
     if state.STREAM_PROCESS:
         state.STREAM_PROCESS.terminate()
@@ -230,6 +274,7 @@ async def lifespan(app: FastAPI):
     try:
         await _start_stream_proxy()
         await _initialize_browser_and_page()
+        await _initialize_session_manager()
 
         launch_mode = get_environment_variable("LAUNCH_MODE", "unknown")
         if state.is_page_ready or launch_mode == "direct_debug_no_browser":

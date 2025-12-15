@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     )
 
     from api_utils.context_types import QueueItem
+    from api_utils.session_manager import SessionManager
     from models.logging import WebSocketConnectionManager
 
 
@@ -93,6 +94,9 @@ class ServerState:
 
         # --- Control Flags ---
         self.should_exit: bool = False
+
+        # --- Multi-Session Pooling ---
+        self.session_manager: Optional["SessionManager"] = None
 
     def clear_debug_logs(self) -> None:
         """Clear console and network logs (called after each request)."""

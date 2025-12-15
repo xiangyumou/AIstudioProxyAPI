@@ -85,3 +85,8 @@ USERSCRIPT_PATH = get_environment_variable(
 # --- MCP 配置 ---
 MCP_HTTP_ENDPOINT = get_environment_variable("MCP_HTTP_ENDPOINT", "")
 MCP_HTTP_TIMEOUT = float(os.environ.get("MCP_HTTP_TIMEOUT", "15"))
+
+# --- 多会话池化配置 ---
+MULTI_SESSION_ENABLED = get_boolean_env("MULTI_SESSION_ENABLED", False)
+SESSION_POOL_SIZE = get_int_env("SESSION_POOL_SIZE", 0)  # 0 = 自动检测目录中文件数量
+

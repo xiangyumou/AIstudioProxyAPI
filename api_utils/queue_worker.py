@@ -377,65 +377,44 @@ class QueueManager:
         http_request: Request,
         result_future: Future[Union[StreamingResponse, JSONResponse]],
     ) -> None:
-        """Execute the actual request processing logic."""
+        """Execute the actual request processing logic.
+
+        In multi-session mode, this acquires a session from the pool and uses
+        its lock. In single-session mode (default), uses the global page instance.
+        """
         # 确保日志上下文已设置
         set_request_id(req_id)
 
+        from api_utils.server_state import state
+
+        # Check if multi-session mode is enabled
+        session = None
+        if state.session_manager:
+            try:
+                session = await state.session_manager.get_session()
+                self.logger.info(
+                    f"(Worker) Using session: {session.session_id}"
+                )
+            except RuntimeError as e:
+                self.logger.error(f"(Worker) Failed to get session: {e}")
+                if not result_future.done():
+                    result_future.set_exception(
+                        server_error(req_id, f"No available sessions: {e}")
+                    )
+                raise
+
         try:
-            from api_utils import (
-                _process_request_refactored,  # pyright: ignore[reportPrivateUsage]
-            )
-
-            # Store these for cleanup usage if needed
-            self.current_submit_btn_loc = None
-            self.current_client_disco_checker = None
-            self.current_completion_event = None
-            self.current_req_id = req_id
-
-            returned_value: Optional[
-                Tuple[Optional[Event], Locator, Callable[[str], bool]]
-            ] = await _process_request_refactored(
-                req_id, request_data, http_request, result_future
-            )
-
-            # Initialize variables that will be set from tuple unpacking
-            completion_event: Optional[Event] = None
-            submit_btn_loc: Optional[Locator] = None
-            client_disco_checker: Optional[Callable[[str], bool]] = None
-            current_request_was_streaming = False
-
-            if returned_value is not None:
-                # Always expect 3-tuple: (Optional[Event], Locator, Callable)
-                completion_event, submit_btn_loc, client_disco_checker = returned_value
-
-                if completion_event is not None:
-                    current_request_was_streaming = True
-                    self.logger.info("(Worker) Stream info received.")
-                else:
-                    self.logger.info(
-                        "(Worker) Tuple received but completion_event is None."
+            # If using multi-session mode, acquire the session's lock
+            if session:
+                async with session.lock:
+                    await self._execute_with_page(
+                        req_id, request_data, http_request, result_future, session.page
                     )
             else:
-                self.logger.info("(Worker) Non-stream completion (None).")
-
-            # Store for cleanup
-            self.current_submit_btn_loc = submit_btn_loc
-            self.current_client_disco_checker = client_disco_checker
-            self.current_completion_event = completion_event
-
-            # Initialize stream_state for monitoring
-            stream_state: Optional[Dict[str, Any]] = None
-
-            await self._monitor_completion(
-                req_id,
-                http_request,
-                result_future,
-                completion_event,
-                submit_btn_loc,
-                client_disco_checker,
-                current_request_was_streaming,
-                stream_state,
-            )
+                # Single-session mode: use global page instance
+                await self._execute_with_page(
+                    req_id, request_data, http_request, result_future, state.page_instance
+                )
 
         except asyncio.CancelledError:
             self.logger.info("(Worker) Execution cancelled.")
@@ -446,8 +425,75 @@ class QueueManager:
                 result_future.set_exception(
                     server_error(req_id, f"Request processing error: {process_err}")
                 )
+            # Mark session as failed in multi-session mode
+            if session and state.session_manager:
+                state.session_manager.mark_session_failed(session)
             # 重新抛出异常以触发重试机制
             raise
+
+    async def _execute_with_page(
+        self,
+        req_id: str,
+        request_data: ChatCompletionRequest,
+        http_request: Request,
+        result_future: Future[Union[StreamingResponse, JSONResponse]],
+        page: Any,  # AsyncPage but avoiding import cycle
+    ) -> None:
+        """Execute request processing with a specific page instance."""
+        from api_utils import (
+            _process_request_refactored,  # pyright: ignore[reportPrivateUsage]
+        )
+
+        # Store these for cleanup usage if needed
+        self.current_submit_btn_loc = None
+        self.current_client_disco_checker = None
+        self.current_completion_event = None
+        self.current_req_id = req_id
+
+        returned_value: Optional[
+            Tuple[Optional[Event], Locator, Callable[[str], bool]]
+        ] = await _process_request_refactored(
+            req_id, request_data, http_request, result_future
+        )
+
+        # Initialize variables that will be set from tuple unpacking
+        completion_event: Optional[Event] = None
+        submit_btn_loc: Optional[Locator] = None
+        client_disco_checker: Optional[Callable[[str], bool]] = None
+        current_request_was_streaming = False
+
+        if returned_value is not None:
+            # Always expect 3-tuple: (Optional[Event], Locator, Callable)
+            completion_event, submit_btn_loc, client_disco_checker = returned_value
+
+            if completion_event is not None:
+                current_request_was_streaming = True
+                self.logger.info("(Worker) Stream info received.")
+            else:
+                self.logger.info(
+                    "(Worker) Tuple received but completion_event is None."
+                )
+        else:
+            self.logger.info("(Worker) Non-stream completion (None).")
+
+        # Store for cleanup
+        self.current_submit_btn_loc = submit_btn_loc
+        self.current_client_disco_checker = client_disco_checker
+        self.current_completion_event = completion_event
+
+        # Initialize stream_state for monitoring
+        stream_state: Optional[Dict[str, Any]] = None
+
+        await self._monitor_completion(
+            req_id,
+            http_request,
+            result_future,
+            completion_event,
+            submit_btn_loc,
+            client_disco_checker,
+            current_request_was_streaming,
+            stream_state,
+        )
 
     async def _monitor_completion(
         self,
