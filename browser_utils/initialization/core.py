@@ -142,7 +142,25 @@ async def initialize_page_logic(  # pragma: no cover
         # 设置网络拦截和脚本注入
         await setup_network_interception_and_scripts(temp_context)
 
+        # 关闭任何自动创建的初始页面
+        # 当使用 storage_state 时，Playwright 可能会自动创建一个初始页面（通常是 about:blank）
+        # 这会导致同一个 context 中出现多个页面，需要清理
+        initial_pages = temp_context.pages
+        if initial_pages:
+            logger.info(
+                f"   检测到 {len(initial_pages)} 个自动创建的初始页面，正在关闭..."
+            )
+            for page in initial_pages:
+                try:
+                    if not page.is_closed():
+                        await page.close()
+                        logger.debug(f"   已关闭初始页面: {page.url}")
+                except Exception as e:
+                    logger.warning(f"   关闭初始页面时出错: {e}")
+            logger.info("   初始页面已清理完成")
+
         found_page: Optional[AsyncPage] = None
+        # 重新获取 pages 列表（应该为空）
         pages = temp_context.pages
         target_url_base = f"https://{AI_STUDIO_URL_PATTERN}"
         target_full_url = f"{target_url_base}prompts/new_chat"
@@ -151,6 +169,7 @@ async def initialize_page_logic(  # pragma: no cover
 
         # 导入_handle_model_list_response - 需要延迟导入避免循环引用
         from browser_utils.operations import _handle_model_list_response
+
 
         for p_iter in pages:
             try:
