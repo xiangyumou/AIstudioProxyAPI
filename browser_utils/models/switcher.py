@@ -20,7 +20,7 @@ logger = logging.getLogger("AIStudioProxyServer")
 
 async def switch_ai_studio_model(page: AsyncPage, model_id: str, req_id: str) -> bool:
     """切换AI Studio模型"""
-    logger.info(f" 开始切换模型到: {model_id}")
+    logger.info(f"[模型] 切换: -> {model_id}")
     original_prefs_str: Optional[str] = None
     original_prompt_model: Optional[str] = None
     new_chat_url = f"https://{AI_STUDIO_URL_PATTERN}prompts/new_chat"
@@ -33,11 +33,8 @@ async def switch_ai_studio_model(page: AsyncPage, model_id: str, req_id: str) ->
             try:
                 original_prefs_obj = json.loads(original_prefs_str)
                 original_prompt_model = original_prefs_obj.get("promptModel")
-                logger.info(
-                    f" 切换前 localStorage.promptModel 为: {original_prompt_model or '未设置'}"
-                )
             except json.JSONDecodeError:
-                logger.warning(" 无法解析原始的 aiStudioUserPreference JSON 字符串。")
+                logger.warning("无法解析原始的 aiStudioUserPreference JSON 字符串。")
                 original_prefs_str = None
 
         current_prefs_for_modification = (
@@ -46,13 +43,9 @@ async def switch_ai_studio_model(page: AsyncPage, model_id: str, req_id: str) ->
         full_model_path = f"models/{model_id}"
 
         if current_prefs_for_modification.get("promptModel") == full_model_path:
-            logger.info(
-                f" 模型已经设置为 {model_id} (localStorage 中已是目标值)，无需切换"
-            )
+            logger.debug(f"[Model] 已是目标模型 {model_id}")
             if page.url != new_chat_url:
-                logger.info(
-                    f" 当前 URL 不是 new_chat ({page.url})，导航到 {new_chat_url}"
-                )
+                logger.debug(f"[Model] URL 非 new_chat，导航到 {new_chat_url}")
                 await page.goto(
                     new_chat_url, wait_until="domcontentloaded", timeout=30000
                 )
@@ -61,8 +54,8 @@ async def switch_ai_studio_model(page: AsyncPage, model_id: str, req_id: str) ->
                 )
             return True
 
-        logger.info(
-            f" 从 {current_prefs_for_modification.get('promptModel', '未知')} 更新 localStorage.promptModel 为 {full_model_path}"
+        logger.debug(
+            f"[Model] 更新 localStorage.promptModel: {current_prefs_for_modification.get('promptModel', '未知')} -> {full_model_path}"
         )
         current_prefs_for_modification["promptModel"] = full_model_path
         await page.evaluate(
@@ -71,10 +64,10 @@ async def switch_ai_studio_model(page: AsyncPage, model_id: str, req_id: str) ->
         )
 
         # 使用新的强制设置功能
-        logger.info(" 应用强制UI状态设置...")
+        logger.debug("[State] 应用强制 UI 状态设置...")
         ui_state_success = await _verify_and_apply_ui_state(page, req_id)
         if not ui_state_success:
-            logger.warning(" UI状态设置失败，但继续执行模型切换流程")
+            logger.warning("UI状态设置失败，但继续执行模型切换流程")
 
         # 为了保持兼容性，也更新当前的prefs对象
         current_prefs_for_modification["isAdvancedOpen"] = True
@@ -84,20 +77,20 @@ async def switch_ai_studio_model(page: AsyncPage, model_id: str, req_id: str) ->
             json.dumps(current_prefs_for_modification),
         )
 
-        logger.info(f" localStorage 已更新，导航到 '{new_chat_url}' 应用新模型...")
+        logger.debug(f"[Model] 导航到 {new_chat_url}...")
         await page.goto(new_chat_url, wait_until="domcontentloaded", timeout=30000)
 
         input_field = page.locator(INPUT_SELECTOR)
         await expect_async(input_field).to_be_visible(timeout=30000)
-        logger.info(" 页面已导航到新聊天并加载完成，输入框可见")
+        logger.debug("[Model] 页面导航完成，输入框可见")
 
         # 页面加载后再次验证UI状态设置
-        logger.info(" 页面加载完成，验证UI状态设置...")
+        logger.debug("[State] 验证 UI 状态...")
         final_ui_state_success = await _verify_and_apply_ui_state(page, req_id)
         if final_ui_state_success:
-            logger.info(" UI状态最终验证成功")
+            logger.debug("[State] UI 状态验证成功")
         else:
-            logger.warning(" UI状态最终验证失败，但继续执行模型切换流程")
+            logger.warning("UI状态最终验证失败，但继续执行模型切换流程")
 
         final_prefs_str = await page.evaluate(
             "() => localStorage.getItem('aiStudioUserPreference')"
@@ -108,12 +101,10 @@ async def switch_ai_studio_model(page: AsyncPage, model_id: str, req_id: str) ->
                 final_prefs_obj = json.loads(final_prefs_str)
                 final_prompt_model_in_storage = final_prefs_obj.get("promptModel")
             except json.JSONDecodeError:
-                logger.warning(" 无法解析刷新后的 aiStudioUserPreference JSON 字符串。")
+                logger.warning("无法解析刷新后的 aiStudioUserPreference JSON 字符串。")
 
         if final_prompt_model_in_storage == full_model_path:
-            logger.info(
-                f" AI Studio localStorage 中模型已成功设置为: {full_model_path}"
-            )
+            logger.debug(f"[Model] localStorage 已设置: {full_model_path}")
 
             page_display_match = False
 
@@ -141,13 +132,11 @@ async def switch_ai_studio_model(page: AsyncPage, model_id: str, req_id: str) ->
 
                 if actual_displayed_model_id_on_page == target_model_id:
                     page_display_match = True
-                    logger.info(
-                        f" 页面显示模型ID ('{actual_displayed_model_id_on_page}') 与期望ID ('{target_model_id}') 一致。"
-                    )
+                    logger.info("[模型] 切换成功")
                 else:
                     page_display_match = False
                     logger.error(
-                        f" 页面显示模型ID ('{actual_displayed_model_id_on_page}') 与期望ID ('{target_model_id}') 不一致。"
+                        f"页面显示模型ID ('{actual_displayed_model_id_on_page}') 与期望ID ('{target_model_id}') 不一致。"
                     )
 
             except asyncio.CancelledError:
@@ -155,12 +144,12 @@ async def switch_ai_studio_model(page: AsyncPage, model_id: str, req_id: str) ->
             except Exception as e_disp:
                 page_display_match = False  # 读取失败则认为不匹配
                 logger.warning(
-                    f" 读取页面显示的当前模型ID时出错: {e_disp}。将无法验证页面显示。"
+                    f"读取页面显示的当前模型ID时出错: {e_disp}。将无法验证页面显示。"
                 )
 
             if page_display_match:
                 try:
-                    logger.info(" 模型切换成功，重新启用 '临时聊天' 模式...")
+                    logger.debug("[Model] 重新启用临时聊天模式...")
                     incognito_button_locator = page.locator(
                         'button[aria-label="Temporary chat toggle"]'
                     )
@@ -174,9 +163,9 @@ async def switch_ai_studio_model(page: AsyncPage, model_id: str, req_id: str) ->
                     )
 
                     if button_classes and "ms-button-active" in button_classes:
-                        logger.info(" '临时聊天' 模式已处于激活状态。")
+                        logger.debug("[Model] 临时聊天模式已激活")
                     else:
-                        logger.info(" '临时聊天' 模式未激活，正在点击以开启...")
+                        logger.debug("[Model] 点击开启临时聊天模式...")
                         await incognito_button_locator.click(timeout=3000)
                         await asyncio.sleep(0.5)
 
@@ -184,27 +173,27 @@ async def switch_ai_studio_model(page: AsyncPage, model_id: str, req_id: str) ->
                             "class"
                         )
                         if updated_classes and "ms-button-active" in updated_classes:
-                            logger.info(" '临时聊天' 模式已成功重新启用。")
+                            logger.debug("[Model] 临时聊天模式已启用")
                         else:
                             logger.warning(
-                                " 点击后 '临时聊天' 模式状态验证失败，可能未成功重新开启。"
+                                "点击后 '临时聊天' 模式状态验证失败，可能未成功重新开启。"
                             )
 
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:
-                    logger.warning(f" 模型切换后重新启用 '临时聊天' 模式失败: {e}")
+                    logger.warning(f"模型切换后重新启用 '临时聊天' 模式失败: {e}")
                 return True
             else:
                 logger.error(
-                    " 模型切换失败，因为页面显示的模型与期望不符 (即使localStorage可能已更改)。"
+                    "模型切换失败，因为页面显示的模型与期望不符 (即使localStorage可能已更改)。"
                 )
         else:
             logger.error(
-                f" AI Studio 未接受模型更改 (localStorage)。期望='{full_model_path}', 实际='{final_prompt_model_in_storage or '未设置或无效'}'."
+                f"AI Studio 未接受模型更改 (localStorage)。期望='{full_model_path}', 实际='{final_prompt_model_in_storage or '未设置或无效'}'."
             )
 
-        logger.info(" 模型切换失败。尝试恢复到页面当前实际显示的模型的状态...")
+        logger.debug("[Recovery] 尝试恢复到页面当前模型...")
         current_displayed_name_for_revert_raw = "无法读取"
         current_displayed_name_for_revert_stripped = "无法读取"
 
@@ -216,25 +205,25 @@ async def switch_ai_studio_model(page: AsyncPage, model_id: str, req_id: str) ->
             current_displayed_name_for_revert_stripped = (
                 current_displayed_name_for_revert_raw.strip()
             )
-            logger.info(
-                f" 恢复：页面当前显示的模型名称 (原始: '{current_displayed_name_for_revert_raw}', 清理后: '{current_displayed_name_for_revert_stripped}')"
+            logger.debug(
+                f"恢复：页面当前显示的模型名称 (原始: '{current_displayed_name_for_revert_raw}', 清理后: '{current_displayed_name_for_revert_stripped}')"
             )
         except asyncio.CancelledError:
             raise
         except Exception as e_read_disp_revert:
             logger.warning(
-                f" 恢复：读取页面当前显示模型名称失败: {e_read_disp_revert}。将尝试回退到原始localStorage。"
+                f"恢复：读取页面当前显示模型名称失败: {e_read_disp_revert}。将尝试回退到原始localStorage。"
             )
             if original_prefs_str:
-                logger.info(
-                    f" 恢复：由于无法读取当前页面显示，尝试将 localStorage 恢复到原始状态: '{original_prompt_model or '未设置'}'"
+                logger.debug(
+                    f"恢复：由于无法读取当前页面显示，尝试将 localStorage 恢复到原始状态: '{original_prompt_model or '未设置'}'"
                 )
                 await page.evaluate(
                     "(origPrefs) => localStorage.setItem('aiStudioUserPreference', origPrefs)",
                     original_prefs_str,
                 )
-                logger.info(
-                    f" 恢复：导航到 '{new_chat_url}' 以应用恢复的原始 localStorage 设置..."
+                logger.debug(
+                    f"恢复：导航到 '{new_chat_url}' 以应用恢复的原始 localStorage 设置..."
                 )
                 await page.goto(
                     new_chat_url, wait_until="domcontentloaded", timeout=20000
@@ -242,29 +231,29 @@ async def switch_ai_studio_model(page: AsyncPage, model_id: str, req_id: str) ->
                 await expect_async(page.locator(INPUT_SELECTOR)).to_be_visible(
                     timeout=20000
                 )
-                logger.info(
-                    " 恢复：页面已导航到新聊天并加载，已尝试应用原始 localStorage。"
+                logger.debug(
+                    "恢复：页面已导航到新聊天并加载，已尝试应用原始 localStorage。"
                 )
             else:
                 logger.warning(
-                    " 恢复：无有效的原始 localStorage 状态可恢复，也无法读取当前页面显示。"
+                    "恢复：无有效的原始 localStorage 状态可恢复，也无法读取当前页面显示。"
                 )
             return False
 
         model_id_to_revert_to = None
         if current_displayed_name_for_revert_stripped != "无法读取":
             model_id_to_revert_to = current_displayed_name_for_revert_stripped
-            logger.info(
-                f" 恢复：页面当前显示的ID是 '{model_id_to_revert_to}'，将直接用于恢复。"
+            logger.debug(
+                f"恢复：页面当前显示的ID是 '{model_id_to_revert_to}'，将直接用于恢复。"
             )
         else:
             if current_displayed_name_for_revert_stripped == "无法读取":
                 logger.warning(
-                    " 恢复：因无法读取页面显示名称，故不能从 parsed_model_list 转换ID。"
+                    "恢复：因无法读取页面显示名称，故不能从 parsed_model_list 转换ID。"
                 )
             else:
                 logger.warning(
-                    f" 恢复：parsed_model_list 为空，无法从显示名称 '{current_displayed_name_for_revert_stripped}' 转换模型ID。"
+                    f"恢复：parsed_model_list 为空，无法从显示名称 '{current_displayed_name_for_revert_stripped}' 转换模型ID。"
                 )
 
         if model_id_to_revert_to:
@@ -278,28 +267,28 @@ async def switch_ai_studio_model(page: AsyncPage, model_id: str, req_id: str) ->
                 elif original_prefs_str:
                     base_prefs_for_final_revert = json.loads(original_prefs_str)
             except json.JSONDecodeError:
-                logger.warning(" 恢复：解析现有 localStorage 以构建恢复偏好失败。")
+                logger.warning("恢复：解析现有 localStorage 以构建恢复偏好失败。")
 
             path_to_revert_to = f"models/{model_id_to_revert_to}"
             base_prefs_for_final_revert["promptModel"] = path_to_revert_to
             # 使用新的强制设置功能
-            logger.info(" 恢复：应用强制UI状态设置...")
+            logger.debug("[Recovery] 应用强制 UI 状态...")
             ui_state_success = await _verify_and_apply_ui_state(page, req_id)
             if not ui_state_success:
-                logger.warning(" 恢复：UI状态设置失败，但继续执行恢复流程")
+                logger.warning("恢复：UI状态设置失败，但继续执行恢复流程")
 
             # 为了保持兼容性，也更新当前的prefs对象
             base_prefs_for_final_revert["isAdvancedOpen"] = True
             base_prefs_for_final_revert["areToolsOpen"] = True
-            logger.info(
-                f" 恢复：准备将 localStorage.promptModel 设置回页面实际显示的模型的路径: '{path_to_revert_to}'，并强制设置配置选项"
+            logger.debug(
+                f"恢复：准备将 localStorage.promptModel 设置回页面实际显示的模型的路径: '{path_to_revert_to}'，并强制设置配置选项"
             )
             await page.evaluate(
                 "(prefsStr) => localStorage.setItem('aiStudioUserPreference', prefsStr)",
                 json.dumps(base_prefs_for_final_revert),
             )
-            logger.info(
-                f" 恢复：导航到 '{new_chat_url}' 以应用恢复到 '{model_id_to_revert_to}' 的 localStorage 设置..."
+            logger.debug(
+                f"恢复：导航到 '{new_chat_url}' 以应用恢复到 '{model_id_to_revert_to}' 的 localStorage 设置..."
             )
             await page.goto(new_chat_url, wait_until="domcontentloaded", timeout=30000)
             await expect_async(page.locator(INPUT_SELECTOR)).to_be_visible(
@@ -307,30 +296,30 @@ async def switch_ai_studio_model(page: AsyncPage, model_id: str, req_id: str) ->
             )
 
             # 恢复后再次验证UI状态
-            logger.info(" 恢复：页面加载完成，验证UI状态设置...")
+            logger.debug("[Recovery] 验证 UI 状态...")
             final_ui_state_success = await _verify_and_apply_ui_state(page, req_id)
             if final_ui_state_success:
-                logger.info(" 恢复：UI状态最终验证成功")
+                logger.debug("[Recovery] UI 状态验证成功")
             else:
-                logger.warning(" 恢复：UI状态最终验证失败")
+                logger.warning("恢复：UI状态最终验证失败")
 
-            logger.info(
-                f" 恢复：页面已导航到新聊天并加载。localStorage 应已设置为反映模型 '{model_id_to_revert_to}'。"
+            logger.debug(
+                f"恢复：页面已导航到新聊天并加载。localStorage 应已设置为反映模型 '{model_id_to_revert_to}'。"
             )
         else:
             logger.error(
-                f" 恢复：无法将模型恢复到页面显示的状态，因为未能从显示名称 '{current_displayed_name_for_revert_stripped}' 确定有效模型ID。"
+                f"恢复：无法将模型恢复到页面显示的状态，因为未能从显示名称 '{current_displayed_name_for_revert_stripped}' 确定有效模型ID。"
             )
             if original_prefs_str:
                 logger.warning(
-                    f" 恢复：作为最终后备，尝试恢复到原始 localStorage: '{original_prompt_model or '未设置'}'"
+                    f"恢复：作为最终后备，尝试恢复到原始 localStorage: '{original_prompt_model or '未设置'}'"
                 )
                 await page.evaluate(
                     "(origPrefs) => localStorage.setItem('aiStudioUserPreference', origPrefs)",
                     original_prefs_str,
                 )
-                logger.info(
-                    f" 恢复：导航到 '{new_chat_url}' 以应用最终后备的原始 localStorage。"
+                logger.debug(
+                    f"恢复：导航到 '{new_chat_url}' 以应用最终后备的原始 localStorage。"
                 )
                 await page.goto(
                     new_chat_url, wait_until="domcontentloaded", timeout=20000
@@ -338,33 +327,33 @@ async def switch_ai_studio_model(page: AsyncPage, model_id: str, req_id: str) ->
                 await expect_async(page.locator(INPUT_SELECTOR)).to_be_visible(
                     timeout=20000
                 )
-                logger.info(
-                    " 恢复：页面已导航到新聊天并加载，已应用最终后备的原始 localStorage。"
+                logger.debug(
+                    "恢复：页面已导航到新聊天并加载，已应用最终后备的原始 localStorage。"
                 )
             else:
-                logger.warning(" 恢复：无有效的原始 localStorage 状态可作为最终后备。")
+                logger.warning("恢复：无有效的原始 localStorage 状态可作为最终后备。")
 
         return False
 
     except asyncio.CancelledError:
         raise
     except Exception:
-        logger.exception(" 切换模型过程中发生严重错误")
+        logger.exception("切换模型过程中发生严重错误")
         # 导入save_error_snapshot函数
         from browser_utils.operations import save_error_snapshot
 
         await save_error_snapshot(f"model_switch_error_{req_id}")
         try:
             if original_prefs_str:
-                logger.info(
-                    f" 发生异常，尝试恢复 localStorage 至: {original_prompt_model or '未设置'}"
+                logger.debug(
+                    f"发生异常，尝试恢复 localStorage 至: {original_prompt_model or '未设置'}"
                 )
                 await page.evaluate(
                     "(origPrefs) => localStorage.setItem('aiStudioUserPreference', origPrefs)",
                     original_prefs_str,
                 )
-                logger.info(
-                    f" 异常恢复：导航到 '{new_chat_url}' 以应用恢复的 localStorage。"
+                logger.debug(
+                    f"异常恢复：导航到 '{new_chat_url}' 以应用恢复的 localStorage。"
                 )
                 await page.goto(
                     new_chat_url, wait_until="domcontentloaded", timeout=15000
@@ -375,7 +364,7 @@ async def switch_ai_studio_model(page: AsyncPage, model_id: str, req_id: str) ->
         except asyncio.CancelledError:
             raise
         except Exception as recovery_err:
-            logger.error(f" 异常后恢复 localStorage 失败: {recovery_err}")
+            logger.error(f"异常后恢复 localStorage 失败: {recovery_err}")
         return False
 
 
@@ -410,14 +399,14 @@ def load_excluded_models(filename: str):
             if loaded_ids:
                 excluded_model_ids.update(loaded_ids)
                 state.excluded_model_ids = excluded_model_ids
-                logger.info(
-                    f"从 '{filename}' 加载了 {len(loaded_ids)} 个模型到排除列表: {excluded_model_ids}"
+                logger.debug(
+                    f"从 '{filename}' 加载了 {len(loaded_ids)} 个模型到排除列表"
                 )
             else:
-                logger.info(
+                logger.debug(
                     f"'{filename}' 文件为空或不包含有效的模型 ID，排除列表未更改。"
                 )
         else:
-            logger.info(f"模型排除列表文件 '{filename}' 未找到，排除列表为空。")
+            logger.debug(f"模型排除列表文件 '{filename}' 未找到，排除列表为空。")
     except Exception as e:
         logger.error(f"从 '{filename}' 加载排除模型列表时出错: {e}", exc_info=True)

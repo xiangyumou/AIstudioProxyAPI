@@ -7,19 +7,20 @@ from .context_types import RequestContext
 
 
 async def initialize_request_context(
-    req_id: str, request: ChatCompletionRequest
+    req_id: str, request: ChatCompletionRequest, page: Optional[Any] = None
 ) -> RequestContext:
     from api_utils.server_state import state
 
     set_request_id(req_id)
-    state.logger.info("开始处理请求...")
-    state.logger.info(f"  请求参数 - Model: {request.model}, Stream: {request.stream}")
+    state.logger.debug(
+        f"[Request] 参数: Model={request.model}, Stream={request.stream}"
+    )
 
     context: RequestContext = cast(
         RequestContext,
         {
             "logger": state.logger,
-            "page": state.page_instance,
+            "page": page if page is not None else state.page_instance,
             "is_page_ready": state.is_page_ready,
             "parsed_model_list": state.parsed_model_list,
             "current_ai_studio_model_id": state.current_ai_studio_model_id,

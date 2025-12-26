@@ -86,23 +86,36 @@ class TestFindFirstVisibleLocator:
 
     @pytest.mark.asyncio
     async def test_fallback_to_second_when_first_not_visible(self):
-        """Should try next selector when first is not visible."""
+        """Should try next selector when first is not visible.
+
+        Updated for two-phase approach:
+        - Phase 1: Quick count() check finds both selectors exist
+        - Phase 2: First selector's visibility fails, second succeeds
+        """
         mock_page = MagicMock()
         mock_locator1 = MagicMock()
         mock_locator2 = MagicMock()
-        mock_page.locator.side_effect = [mock_locator1, mock_locator2]
 
-        call_count = 0
+        # count() returns 1 for both selectors (they exist in DOM)
+        mock_locator1.count = AsyncMock(return_value=1)
+        mock_locator2.count = AsyncMock(return_value=1)
+
+        # Track which locator we're on
+        locator_sequence = [mock_locator1, mock_locator2, mock_locator1, mock_locator2]
+        mock_page.locator.side_effect = locator_sequence
+
+        visibility_call_count = 0
 
         async def visibility_side_effect(timeout):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
+            nonlocal visibility_call_count
+            visibility_call_count += 1
+            if visibility_call_count == 1:
+                # First visibility check fails
                 raise Exception("Timeout")
-            # Second call succeeds
+            # Second visibility check succeeds
             return None
 
-        # Mock expect to fail first, succeed second
+        # Mock expect to fail first visibility, succeed second
         with patch("playwright.async_api.expect") as mock_expect:
             mock_expect.return_value.to_be_visible = AsyncMock(
                 side_effect=visibility_side_effect
@@ -174,17 +187,17 @@ class TestRegressionFixes:
     """Regression tests for specific bug fixes."""
 
     @pytest.mark.asyncio
-    async def test_find_first_visible_locator_waits_for_elements(self):
-        """Verify find_first_visible_locator actively waits for elements.
+    async def test_find_first_visible_locator_uses_active_listening(self):
+        """Verify find_first_visible_locator uses active DOM listening.
 
         Regression test for timing issue: In headless mode, elements may not
-        be rendered immediately after page load. Using find_first_visible_locator
-        (which calls expect().to_be_visible()) ensures we wait for elements,
-        unlike find_first_available_locator which only checks if elements exist.
+        be rendered immediately after page load. The function should use
+        Playwright's expect().to_be_visible() with MutationObserver internally,
+        not just poll or check existence.
 
         This test ensures:
-        1. The function uses Playwright's expect().to_be_visible() with timeout
-        2. It doesn't just check element count (which would cause timing issues)
+        - Primary selector gets full timeout for active waiting
+        - Playwright's expect().to_be_visible() is called with specified timeout
         """
         mock_page = MagicMock()
         mock_locator = MagicMock()
@@ -203,12 +216,12 @@ class TestRegressionFixes:
 
             await find_first_visible_locator(
                 mock_page,
-                ["ms-prompt-input-wrapper"],
+                ["ms-chunk-editor"],
                 "input container",
                 timeout_per_selector=30000,  # 30 seconds as used in core.py
             )
 
-        # Verify to_be_visible was called with the timeout
+        # Verify to_be_visible was called with the specified timeout
         assert len(visibility_calls) == 1
         assert visibility_calls[0]["timeout"] == 30000
 
